@@ -1,0 +1,115 @@
+class MainActivity : AppCompatActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContentView(R.layout.activity_main)
+        var recycler = findViewById<RecyclerView>(R.id.recycler_view_data_nager)
+        var db = Room.databaseBuilder(
+            applicationContext,
+            NewtonDatabase::class.java,
+            "NewtonDB"
+        ).build()
+        CoroutineScope(Dispatchers.Main).launch {
+            var newtonDB: NewtonDB? = null
+            withContext(Dispatchers.IO) {
+                newtonDB = db.newtonDao().getAll()
+            }
+            if (newtonDB != null)
+                recycler.adapter = NewtonAdapter(Newton(
+                    answer = newtonDB!!.answer,
+                    symb = newtonDB!!.symb,
+                ),
+                )
+            recycler.layoutManager = LinearLayoutManager(this@MainActivity)
+        }
+        findViewById<Button>(R.id.LoadButton).setOnClickListener {
+            val privet = findViewById<EditText>(R.id.privet).text.toString()
+            var retrofit = Retrofit.Builder()
+                .baseUrl("http://10.0.2.2:10001")
+                .addConverterFactory(GsonConverterFactory.create())
+                .build()
+            var service = retrofit.create(NewtonApi::class.java)
+            var call = service.getNewton(privet)
+            call.enqueue(object : Callback<Newton>{
+                override fun onResponse(call: Call<Newton>, response: Response<Newton>) {
+                    val body = response.body()
+                    CoroutineScope(Dispatchers.Main).launch {
+                        withContext(Dispatchers.IO) {
+                            db.newtonDao().clear()
+                            db.newtonDao().add(NewtonDB(
+                                answer = body!!.answer,
+                                symb = body!!.symb,
+                            ))
+                        }
+                        recycler.layoutManager = LinearLayoutManager(this@MainActivity)
+                        recycler.adapter?.notifyDataSetChanged()
+                    }
+                }
+                override fun onFailure(call: Call<Newton>, t: Throwable) {
+                    Toast.makeText(
+                        this@MainActivity,
+                        "Ошибка загрузки",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            })
+        }
+    }
+}
+---------------------------------------------------------------------------------------------------------------------------
+class NewtonAdapter(private val newton: Newton)
+    : RecyclerView.Adapter<NewtonAdapter.NewtonHolder>()
+{
+    class NewtonHolder(view: View): RecyclerView.ViewHolder(view){
+        var answer = view.findViewById<TextView>(R.id.answer)
+        var symb = view.findViewById<TextView>(R.id.symb)
+    }
+
+    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): NewtonHolder {
+        return NewtonHolder(
+            LayoutInflater.from(parent.context)
+                .inflate(R.layout.newton, parent, false)
+        )
+    }
+    override fun onBindViewHolder(holder: NewtonHolder, position: Int) {
+        holder.answer.text = newton.answer.toString()
+        holder.symb.text = newton.symb.toString()
+    }
+    override fun getItemCount() = 1
+}
+---------------------------------------------------------------------------------------------------------------------------
+@Entity
+data class NewtonDB (
+    @ColumnInfo(name = "answer") var answer: String? = null,
+    @ColumnInfo(name = "symb") var symb: String? = null,
+)
+{
+    @PrimaryKey(autoGenerate = true) var uid: Int = 0
+}
+@Dao
+interface NewtonDAO{
+    @Insert
+    fun add(newton: NewtonDB)
+    @Query("SELECT * FROM NewtonDB")
+    fun getAll(): NewtonDB
+    @Query("DELETE FROM NewtonDB")
+    fun clear()
+}
+@Database(entities = arrayOf(NewtonDB::class), version = 3)
+abstract class NewtonDatabase: RoomDatabase(){
+    abstract fun newtonDao():NewtonDAO
+}
+----------------------------------------------------------------------------------------------------------------------------
+data class Newton (
+    @SerializedName("answer")
+    @Expose
+    var answer: String? = null,
+    @SerializedName("symb")
+    @Expose
+    var symb: String? = null,
+)
+interface NewtonApi{
+    @GET("/?input={privet}")
+    fun getNewton(
+        @Path("privet") privet: String,
+    ) : Call <Newton>
+}
